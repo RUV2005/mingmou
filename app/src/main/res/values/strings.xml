@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">明眸</string>
+    <string name="font_size_label">字体大小：%1$dsp</string>
+</resources>

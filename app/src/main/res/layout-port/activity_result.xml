@@ -1,0 +1,96 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/background_color"
+    tools:ignore="MissingDefaultResource">
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:background="@color/background_color"
+        android:id="@+id/recyclerView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:padding="16dp"/>
+
+    <!-- 优化后的控制面板 -->
+    <LinearLayout
+        android:id="@+id/controlPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="@drawable/control_bar_bg_with_shadow"
+        android:elevation="8dp">
+
+        <!-- 居中按钮容器 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_horizontal"
+            android:paddingVertical="8dp">
+
+            <Button
+                android:id="@+id/btnToggleDirection"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="切换内容滑动方向"
+                android:layout_marginHorizontal="16dp"
+                android:minWidth="120dp"/>  <!-- 确保按钮宽度统一 -->
+
+        </LinearLayout>
+
+        <!-- 字体控制行（保持原有结构） -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingVertical="8dp"
+            android:paddingHorizontal="16dp">
+
+            <!-- 其他控件保持不变 -->
+            <TextView
+                android:id="@+id/tvFontSize"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/font_size_label"
+                android:textColor="#424242"
+                android:textSize="10sp"/>
+
+            <Button
+                android:id="@+id/btnDecrease"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:background="@drawable/round_button_bg"
+                android:text="-"
+                android:textColor="#FFFFFF"
+                android:textSize="20sp"
+                android:layout_marginStart="16dp"/>
+
+            <SeekBar
+                android:id="@+id/seekBarFontSize"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="8dp"
+                android:min="12"
+                android:max="30"
+                android:progress="16"
+                android:progressDrawable="@drawable/seekbar_track"
+                android:thumb="@drawable/seekbar_thumb"/>
+
+            <Button
+                android:id="@+id/btnIncrease"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:background="@drawable/round_button_bg"
+                android:text="+"
+                android:textColor="#FFFFFF"
+                android:textSize="20sp"
+                android:layout_marginEnd="16dp"/>
+
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>
