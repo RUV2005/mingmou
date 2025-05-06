@@ -10,6 +10,7 @@ import android.speech.tts.UtteranceProgressListener
 import android.util.Base64
 import android.util.Log
 import android.widget.Button
+import android.widget.ImageButton
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -42,7 +43,7 @@ import javax.crypto.spec.SecretKeySpec
 
 class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var isFlashOn = false
-    private lateinit var flashButton: MaterialButton
+    private lateinit var flashButton: ImageButton
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var previewView: PreviewView // 使用 PreviewView 类型
     private var imageCapture: ImageCapture? = null
@@ -73,12 +74,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         tts = TextToSpeech(this, this)
 
         // 初始化闪光灯按钮
-        flashButton = findViewById(R.id.flash_button)
+        flashButton =  findViewById<ImageButton>(R.id.flash_button)
         flashButton.setOnClickListener { toggleFlash() }
 
         // 初始化视图
         previewView = findViewById(R.id.preview_view) // 确保 ID 匹配
-        val captureButton: Button = findViewById(R.id.capture_button)
+        val captureButton: ImageButton = findViewById(R.id.capture_button)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
 
@@ -155,7 +156,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private fun updateFlashState() {
         val iconRes = if (isFlashOn) R.drawable.ic_flash_on else R.drawable.ic_flash_off
-        flashButton.icon = ContextCompat.getDrawable(this, iconRes)
+        flashButton.setImageResource(iconRes) // 使用 setImageResource 替代 icon
     }
 
     private fun startCamera() {

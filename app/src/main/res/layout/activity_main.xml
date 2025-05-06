@@ -4,44 +4,38 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
-    <com.google.android.material.button.MaterialButton
+    <!-- PreviewView 在底层 -->
+    <androidx.camera.view.PreviewView
+        android:id="@+id/preview_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        app:scaleType="fitCenter" />
+
+    <!-- 拍照按钮 -->
+    <ImageButton
+        android:id="@+id/capture_button"
+        android:layout_width="64dp"
+        android:layout_height="64dp"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="64dp"
+        android:contentDescription="拍照按钮"
+        android:elevation="8dp"
+        android:background="@color/white"
+        android:foreground="?attr/selectableItemBackgroundBorderless"
+        android:src="@drawable/ic_camera" />
+
+    <!-- 闪光灯按钮 -->
+    <ImageButton
         android:id="@+id/flash_button"
         android:layout_width="48dp"
         android:layout_height="48dp"
         android:layout_gravity="top|end"
         android:layout_marginTop="16dp"
         android:layout_marginEnd="16dp"
-        android:backgroundTint="@android:color/white"
-        app:cornerRadius="24dp"
-        app:elevation="4dp"
-        app:icon="@drawable/ic_flash_off"
-        app:iconSize="24dp"
-        app:iconTint="@color/colorPrimaryDark"
-        app:rippleColor="@color/colorPrimary"/>
-
-    <androidx.camera.view.PreviewView
-        android:id="@+id/preview_view"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        app:scaleType="fitCenter"/>
-
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/capture_button"
-        android:layout_width="64dp"
-        android:layout_height="64dp"
-        android:layout_gravity="bottom|center_horizontal"
-        android:layout_marginBottom="64dp"
-        android:backgroundTint="@color/colorPrimary"
-        android:contentDescription="Capture button"
-        android:gravity="center"
-        android:textColor="@android:color/white"
-        app:cornerRadius="32dp"
-        app:elevation="8dp"
-        app:icon="@drawable/ic_camera"
-        app:iconGravity="textStart"
-        app:iconSize="32dp"
-        app:iconTint="@android:color/white"
-        app:rippleColor="@color/colorPrimaryDark"
-        tools:ignore="MissingClass" />
+        android:contentDescription="闪光灯按钮"
+        android:elevation="4dp"
+        android:background="@color/white"
+        android:foreground="?attr/selectableItemBackgroundBorderless"
+        android:src="@drawable/ic_flash_off" />
 
 </FrameLayout>
