@@ -1,12 +1,12 @@
 package com.danmo.mingmou
 
 import android.Manifest
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.net.Uri
 import android.os.Bundle
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.util.Base64
 import android.util.Log
 import android.widget.Button
@@ -22,7 +22,6 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
-import androidx.core.net.toUri
 import com.google.android.material.button.MaterialButton
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -32,24 +31,46 @@ import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.net.URLEncoder
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Date
+import java.util.LinkedList
+import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var isFlashOn = false
     private lateinit var flashButton: MaterialButton
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var previewView: PreviewView // 使用 PreviewView 类型
     private var imageCapture: ImageCapture? = null
-    private val REQUEST_CAMERA_PERMISSION = 1001
     private var cameraControl: CameraControl? = null
+    // 修复后的跳转方法
+    private var hasNavigated = false // 添加跳转标志
+
+    // 添加语音状态常量
+    private enum class SpeechStatus {
+        UPLOAD_START,    // 开始上传
+        PROCESSING,      // 正在识别
+        SUCCESS,         // 识别成功
+        FAILURE,         // 识别失败
+        NAVIGATING       // 正在跳转
+    }
+
+    private lateinit var tts: TextToSpeech
+    private var isTTSInitialized = false
+    private var isTTSBound = false
+    private val ttsQueue = LinkedList<SpeechStatus>() // 语音提示队列
+    private var paragraphs = mutableListOf<String>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        // 初始化 TTS
+        tts = TextToSpeech(this, this)
 
         // 初始化闪光灯按钮
         flashButton = findViewById(R.id.flash_button)
@@ -66,6 +87,23 @@ class MainActivity : AppCompatActivity() {
 
         captureButton.setOnClickListener {
             takePhoto()
+        }
+    }
+
+    // 新增 TTS 初始化回调
+    override fun onInit(status: Int) {
+        if (status == TextToSpeech.SUCCESS) {
+            isTTSInitialized = true
+            when (tts.setLanguage(Locale.CHINESE)) {
+                TextToSpeech.LANG_MISSING_DATA,
+                TextToSpeech.LANG_NOT_SUPPORTED -> {
+                    Toast.makeText(this, "不支持中文语音", Toast.LENGTH_SHORT).show()
+                }
+                else -> {
+                    isTTSBound = true
+                    processSpeechQueue() // 初始化完成后处理队列
+                }
+            }
         }
     }
 
@@ -150,6 +188,7 @@ class MainActivity : AppCompatActivity() {
     private fun takePhoto() {
         val imageCapture = imageCapture ?: return
 
+        speakRecognitionStatus("正在识别，请稍候")
         // 确保使用当前闪光灯状态
         imageCapture.flashMode = if (isFlashOn) ImageCapture.FLASH_MODE_ON
         else ImageCapture.FLASH_MODE_OFF
@@ -173,11 +212,14 @@ class MainActivity : AppCompatActivity() {
     private fun processImage(bitmap: Bitmap) {
         Thread {
             try {
-                // 压缩图片并转换为Base64
+                addSpeechToQueue(SpeechStatus.UPLOAD_START) // 开始上传
+
+                // 压缩图片并转换为 Base64
                 val byteArrayOutputStream = ByteArrayOutputStream()
                 bitmap.compress(Bitmap.CompressFormat.JPEG, 80, byteArrayOutputStream)
                 val imageBase64 = Base64.encodeToString(byteArrayOutputStream.toByteArray(), Base64.DEFAULT)
 
+                addSpeechToQueue(SpeechStatus.PROCESSING) // 正在识别
                 // 构造请求
                 val url = buildRequestUrl()
                 val jsonBody = buildRequestBody(imageBase64)
@@ -190,15 +232,101 @@ class MainActivity : AppCompatActivity() {
 
                 val response = client.newCall(request).execute()
                 val responseBody = response.body?.string()
-                Log.d("API Response", responseBody ?: "Empty response")
 
-                // 解析响应
-                responseBody?.let { parseResponse(it) }
+                if (response.isSuccessful && responseBody != null) {
+                    addSpeechToQueue(SpeechStatus.SUCCESS)
+                    parseResponse(responseBody) // parseResponse 内部会添加 NAVIGATING 状态
+                } else {
+                    addSpeechToQueue(SpeechStatus.FAILURE)
+                }
             } catch (e: Exception) {
-                Log.e("API Error", e.message ?: "Unknown error")
+                addSpeechToQueue(SpeechStatus.FAILURE)
             }
         }.start()
     }
+
+    private fun speakRecognitionStatus(text: String) {
+        runOnUiThread {
+            if (isTTSInitialized && isTTSBound) {
+                tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
+            } else {
+                Toast.makeText(this, "语音提示未就绪", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // 新增语音队列管理
+    private fun addSpeechToQueue(status: SpeechStatus) {
+        synchronized(ttsQueue) {
+            ttsQueue.add(status)
+        }
+        runOnUiThread { processSpeechQueue() }
+    }
+
+    // 处理语音队列
+
+    // 处理语音队列
+// 处理语音队列
+// 处理语音队列
+    private fun processSpeechQueue() {
+        if (!isTTSInitialized || !isTTSBound) return
+
+        synchronized(ttsQueue) {
+            if (ttsQueue.isNotEmpty() && !tts.isSpeaking) {
+                val status = ttsQueue.poll()
+                when (status) {
+                    SpeechStatus.UPLOAD_START -> speakWithCallback("开始上传图片") {
+                        processSpeechQueue() // 处理下一个状态
+                    }
+                    SpeechStatus.PROCESSING -> speakWithCallback("正在识别内容") {
+                        processSpeechQueue()
+                    }
+                    SpeechStatus.SUCCESS -> speakWithCallback("识别成功") {
+                        processSpeechQueue()
+                    }
+                    SpeechStatus.FAILURE -> speakWithCallback("识别失败，请重试") {
+                        processSpeechQueue()
+                    }
+                    SpeechStatus.NAVIGATING -> speakAndNavigate() // 跳转逻辑
+                }
+            }
+        }
+    }
+
+    private fun speakWithCallback(text: String, callback: () -> Unit) {
+        val utteranceId = "speech_${System.currentTimeMillis()}"
+        tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {}
+            override fun onDone(utteranceId: String?) {
+                callback()
+            }
+            override fun onError(utteranceId: String?) {
+                callback()
+            }
+        })
+        tts.speak(text, TextToSpeech.QUEUE_ADD, null, utteranceId)
+    }
+
+    // 语音播报并跳转
+    private fun speakAndNavigate() {
+        val utteranceId = "navigate_${System.currentTimeMillis()}"
+        tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {}
+            override fun onDone(utteranceId: String?) {
+                if (!hasNavigated) {
+                    hasNavigated = true
+                    runOnUiThread {
+                        startActivity(Intent(this@MainActivity, ResultActivity::class.java).apply {
+                            putExtra("ocr_result", paragraphs.toTypedArray())
+                        })
+                    }
+                }
+            }
+            override fun onError(utteranceId: String?) {}
+        })
+        tts.speak("正在跳转结果页面", TextToSpeech.QUEUE_ADD, null, utteranceId)
+    }
+
 
     private fun buildRequestUrl(): String {
         val date = SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", Locale.US).apply {
@@ -259,6 +387,7 @@ class MainActivity : AppCompatActivity() {
         }.toString()
     }
 
+    // 解析 API 响应
     private fun parseResponse(response: String) {
         try {
             val json = JSONObject(response)
@@ -271,9 +400,9 @@ class MainActivity : AppCompatActivity() {
 
             val resultJson = JSONObject(decodedText)
             val pages = resultJson.getJSONArray("pages")
-            val paragraphEndings = setOf('。', '！', '？', '.', '!', '?', ';', ';', '…')
-            val paragraphs = mutableListOf<String>()
-            var currentParagraph = StringBuilder()
+            val paragraphEndings = setOf('。', '！', '？', '.', '!', '?', ';', '…')
+            paragraphs = mutableListOf()
+            val currentParagraph = StringBuilder()
 
             for (i in 0 until pages.length()) {
                 val page = pages.getJSONObject(i)
@@ -309,14 +438,12 @@ class MainActivity : AppCompatActivity() {
                 paragraphs.add(currentParagraph.toString().trim())
             }
 
-            runOnUiThread {
-                val intent = Intent(this@MainActivity, ResultActivity::class.java).apply {
-                    putExtra("ocr_result", paragraphs.toTypedArray())
-                }
-                startActivity(intent)
-            }
+            // 添加跳转逻辑到语音队列
+            addSpeechToQueue(SpeechStatus.NAVIGATING)
+
         } catch (e: Exception) {
             Log.e("Parse Error", "解析响应失败: ${e.message}")
+            addSpeechToQueue(SpeechStatus.FAILURE) // 添加失败提示到队列
         }
     }
 
@@ -385,5 +512,9 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         cameraExecutor.shutdown()
+        if (::tts.isInitialized) {
+            tts.stop()
+            tts.shutdown()
+        }
     }
 }

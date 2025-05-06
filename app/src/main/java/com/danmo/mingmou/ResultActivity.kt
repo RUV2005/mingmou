@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.res.Configuration
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
@@ -29,6 +30,9 @@ class ResultActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var isTTsInitialized = false
     private var isTTsBound = false
     private var isVerticalScroll = true // 默认为垂直滑动
+    // 添加自动朗读相关变量
+    private var isAutoReading = false
+    private var currentAutoReadIndex = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,6 +49,8 @@ class ResultActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             paragraphs.addAll(it.toList())
         }
 
+
+
         // 初始化RecyclerView
         val recyclerView = findViewById<RecyclerView>(R.id.recyclerView)
         initRecyclerView(recyclerView)
@@ -53,6 +59,40 @@ class ResultActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         initFontControls()
         // 初始化滑动方向切换按钮
         initToggleDirectionButton(recyclerView)
+    }
+
+
+    private fun startAutoRead() {
+        if (isTTsBound && paragraphs.isNotEmpty()) {
+            isAutoReading = true
+            currentAutoReadIndex = 0
+
+            // 设置UtteranceProgressListener
+            tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) {
+                    Log.d("TTS", "Started utterance: $utteranceId")
+                }
+
+                override fun onDone(utteranceId: String?) {
+                    Log.d("TTS", "Completed utterance: $utteranceId")
+                    // 切换到下一个段落
+                    if (isAutoReading && currentAutoReadIndex < paragraphs.size - 1) {
+                        currentAutoReadIndex++
+                        speakParagraph(currentAutoReadIndex, TextToSpeech.QUEUE_ADD)
+                    } else {
+                        isAutoReading = false
+                    }
+                }
+
+                override fun onError(utteranceId: String?) {
+                    Log.e("TTS", "Error in utterance: $utteranceId")
+                    isAutoReading = false
+                }
+            })
+
+            // 开始第一个段落
+            speakParagraph(currentAutoReadIndex, TextToSpeech.QUEUE_FLUSH)
+        }
     }
 
     private fun initRecyclerView(recyclerView: RecyclerView) {
@@ -165,16 +205,19 @@ class ResultActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun speakParagraph(position: Int) {
+    // 修改后的朗读方法
+    private fun speakParagraph(position: Int, queueMode: Int = TextToSpeech.QUEUE_FLUSH) {
         if (position in paragraphs.indices) {
             if (isTTsInitialized && isTTsBound) {
-                tts.speak(paragraphs[position], TextToSpeech.QUEUE_FLUSH, null, null)
+                val params = Bundle()
+                params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "para_$position")
+                tts.speak(paragraphs[position], queueMode, params, "para_$position")
             } else {
                 Toast.makeText(this, "TTS引擎未就绪", Toast.LENGTH_SHORT).show()
             }
         }
     }
-
+    // 正确的onInit实现位置
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
             isTTsInitialized = true
@@ -185,12 +228,14 @@ class ResultActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 }
                 else -> {
                     isTTsBound = true
+                    startAutoRead()  // 自动朗读入口
                 }
             }
         } else {
             Toast.makeText(this, "TTS初始化失败", Toast.LENGTH_SHORT).show()
         }
     }
+
 
     override fun onDestroy() {
         super.onDestroy()
