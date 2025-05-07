@@ -9,8 +9,7 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Base64
 import android.util.Log
-import android.widget.Button
-import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -23,11 +22,10 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
-import com.google.android.material.button.MaterialButton
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.net.URLEncoder
@@ -43,13 +41,20 @@ import javax.crypto.spec.SecretKeySpec
 
 class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var isFlashOn = false
-    private lateinit var flashButton: ImageButton
+    private lateinit var flashButton: ImageView
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var previewView: PreviewView // 使用 PreviewView 类型
     private var imageCapture: ImageCapture? = null
     private var cameraControl: CameraControl? = null
     // 修复后的跳转方法
     private var hasNavigated = false // 添加跳转标志
+
+
+    companion object {
+        private const val API_KEY = "1d68a7b7f999dbdd55c2de07204f982e"
+        private const val API_SECRET = "YzVlMjcxMGNhMWQ5YzExMTBlOGY0OTdj"
+        private const val APP_ID = "0a6d43e9"
+    }
 
     // 添加语音状态常量
     private enum class SpeechStatus {
@@ -74,12 +79,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         tts = TextToSpeech(this, this)
 
         // 初始化闪光灯按钮
-        flashButton =  findViewById<ImageButton>(R.id.flash_button)
+        flashButton =  findViewById(R.id.flash_button)
+        val flashButton: ImageView = findViewById(R.id.flash_button)
         flashButton.setOnClickListener { toggleFlash() }
 
         // 初始化视图
         previewView = findViewById(R.id.preview_view) // 确保 ID 匹配
-        val captureButton: ImageButton = findViewById(R.id.capture_button)
+        val captureButton: ImageView = findViewById(R.id.capture_button)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
 
@@ -166,7 +172,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
             val preview = Preview.Builder().build().apply {
-                setSurfaceProvider(previewView.surfaceProvider)
+                surfaceProvider = previewView.surfaceProvider
             }
 
             imageCapture = ImageCapture.Builder().build()
@@ -189,7 +195,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun takePhoto() {
         val imageCapture = imageCapture ?: return
 
-        speakRecognitionStatus("正在识别，请稍候")
+        addSpeechToQueue(SpeechStatus.UPLOAD_START)
+        addSpeechToQueue(SpeechStatus.PROCESSING)
         // 确保使用当前闪光灯状态
         imageCapture.flashMode = if (isFlashOn) ImageCapture.FLASH_MODE_ON
         else ImageCapture.FLASH_MODE_OFF
@@ -228,7 +235,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 val client = OkHttpClient()
                 val request = Request.Builder()
                     .url(url)
-                    .post(RequestBody.create("application/json".toMediaType(), jsonBody))
+                    .post(jsonBody.toRequestBody("application/json".toMediaType()))
                     .build()
 
                 val response = client.newCall(request).execute()
@@ -246,16 +253,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }.start()
     }
 
-    private fun speakRecognitionStatus(text: String) {
-        runOnUiThread {
-            if (isTTSInitialized && isTTSBound) {
-                tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, null)
-            } else {
-                Toast.makeText(this, "语音提示未就绪", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
     // 新增语音队列管理
     private fun addSpeechToQueue(status: SpeechStatus) {
         synchronized(ttsQueue) {
@@ -265,16 +262,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     // 处理语音队列
-
-    // 处理语音队列
-// 处理语音队列
-// 处理语音队列
     private fun processSpeechQueue() {
         if (!isTTSInitialized || !isTTSBound) return
 
         synchronized(ttsQueue) {
             if (ttsQueue.isNotEmpty() && !tts.isSpeaking) {
-                val status = ttsQueue.poll()
+                val status = ttsQueue.poll() ?: return // 如果为 null 直接返回
                 when (status) {
                     SpeechStatus.UPLOAD_START -> speakWithCallback("开始上传图片") {
                         processSpeechQueue() // 处理下一个状态
@@ -301,6 +294,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             override fun onDone(utteranceId: String?) {
                 callback()
             }
+            @Deprecated("Deprecated in Java", ReplaceWith("callback()"))
             override fun onError(utteranceId: String?) {
                 callback()
             }
@@ -323,6 +317,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     }
                 }
             }
+            @Deprecated("Deprecated in Java")
             override fun onError(utteranceId: String?) {}
         })
         tts.speak("正在跳转结果页面", TextToSpeech.QUEUE_ADD, null, utteranceId)
@@ -334,13 +329,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             timeZone = TimeZone.getTimeZone("GMT")
         }.format(Date())
 
-        // 替换为你的API密钥
-        val apiKey = "1d68a7b7f999dbdd55c2de07204f982e"
-        val apiSecret = "YzVlMjcxMGNhMWQ5YzExMTBlOGY0OTdj"
+
 
         // 生成签名
-        val signature = generateSignature(date, apiSecret)
-        val authString = "api_key=\"$apiKey\", algorithm=\"hmac-sha256\", headers=\"host date request-line\", signature=\"$signature\""
+        val signature = generateSignature(date)
+        val authString = "api_key=\"$API_KEY\", algorithm=\"hmac-sha256\", headers=\"host date request-line\", signature=\"$signature\""
         val authorization = Base64.encodeToString(authString.toByteArray(), Base64.NO_WRAP)
 
         return "https://api.xf-yun.com/v1/private/sf8e6aca1" +
@@ -349,7 +342,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 "date=${URLEncoder.encode(date, "UTF-8")}"
     }
 
-    private fun generateSignature(date: String, apiSecret: String): String {
+    private fun generateSignature(date: String): String {
         val signatureOrigin = """
             host: api.xf-yun.com
             date: $date
@@ -357,7 +350,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         """.trimIndent()
 
         val mac = Mac.getInstance("HmacSHA256")
-        mac.init(SecretKeySpec(apiSecret.toByteArray(), "HmacSHA256"))
+        mac.init(SecretKeySpec(API_SECRET.toByteArray(), "HmacSHA256"))
         val signatureSha = mac.doFinal(signatureOrigin.toByteArray())
         return Base64.encodeToString(signatureSha, Base64.NO_WRAP)
     }
@@ -365,7 +358,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun buildRequestBody(imageBase64: String): String {
         return JSONObject().apply {
             put("header", JSONObject().apply {
-                put("app_id", "0a6d43e9") // 替换为你的App ID
+                put("app_id", APP_ID)  // 修复这里，添加键名参数
                 put("status", 3)
             })
             put("parameter", JSONObject().apply {
@@ -494,7 +487,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
             val preview = Preview.Builder()
                 .build()
-                .also { it.setSurfaceProvider(previewView.surfaceProvider) }
+                .also { it.surfaceProvider = previewView.surfaceProvider }
 
             try {
                 cameraProvider.bindToLifecycle(

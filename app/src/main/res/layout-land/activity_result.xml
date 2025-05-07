@@ -1,11 +1,10 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:background="@color/background_color"
-    tools:ignore="MissingDefaultResource">
+    tools:ignore="MissingDefaultResource,Overdraw">
 
     <androidx.recyclerview.widget.RecyclerView
         android:background="@color/background_color"
@@ -38,8 +37,9 @@
             android:id="@+id/btnToggleDirection"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="切换内容滑动方向"
-            android:layout_marginStart="16dp"/>
+            android:layout_marginStart="16dp"
+            android:text="@string/btnToggleDirection"
+            tools:ignore="TextContrastCheck" />
 
         <!-- 其他控件保持不变 -->
 
@@ -49,7 +49,7 @@
             android:layout_width="48dp"
             android:layout_height="48dp"
             android:background="@drawable/round_button_bg"
-            android:text="-"
+            android:text="@string/decrease_font_size"
             android:textColor="#FFFFFF"
             android:textSize="20sp"
             android:layout_marginStart="16dp"/>
@@ -67,14 +67,15 @@
             android:progressDrawable="@drawable/seekbar_track"
             android:thumb="@drawable/seekbar_thumb"
             android:splitTrack="false"
-            android:thumbOffset="0dp"/>
+            android:thumbOffset="0dp"
+            tools:targetApi="o" />
 
         <Button
             android:id="@+id/btnIncrease"
             android:layout_width="48dp"
             android:layout_height="48dp"
             android:background="@drawable/round_button_bg"
-            android:text="+"
+            android:text="@string/increase_font_size"
             android:textColor="#FFFFFF"
             android:textSize="20sp"
             android:layout_marginEnd="16dp"/>

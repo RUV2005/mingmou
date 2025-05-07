@@ -2,7 +2,6 @@ package com.danmo.mingmou
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.Intent
 import android.content.res.Configuration
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
@@ -84,6 +83,7 @@ class ResultActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     }
                 }
 
+                @Deprecated("Deprecated in Java")
                 override fun onError(utteranceId: String?) {
                     Log.e("TTS", "Error in utterance: $utteranceId")
                     isAutoReading = false
@@ -122,6 +122,7 @@ class ResultActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         recyclerView.adapter = adapter
     }
 
+    @SuppressLint("NotifyDataSetChanged")
     private fun initToggleDirectionButton(recyclerView: RecyclerView) {
         val toggleButton = findViewById<Button>(R.id.btnToggleDirection)
 
@@ -259,6 +260,7 @@ class ResultActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
         }
 
+        @SuppressLint("NotifyDataSetChanged")
         fun updateTextSize(newSize: Float) {
             textSize = newSize
             notifyDataSetChanged()

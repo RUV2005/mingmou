@@ -1,4 +1,9 @@
 <resources>
     <string name="app_name">明眸</string>
     <string name="font_size_label">字体大小：%1$dsp</string>
+    <string name="flash_light_button">闪光灯按钮</string>
+    <string name="camera_button">拍照按钮</string>
+    <string name="btnToggleDirection">切换内容滑动方向</string>
+    <string name="increase_font_size">+</string>
+    <string name="decrease_font_size">-</string>
 </resources>
