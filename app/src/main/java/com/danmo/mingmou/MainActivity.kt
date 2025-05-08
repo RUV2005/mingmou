@@ -1,6 +1,8 @@
 package com.danmo.mingmou
 
 import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -9,12 +11,14 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Base64
 import android.util.Log
+import android.view.MotionEvent
 import android.widget.ImageView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraControl
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
@@ -71,20 +75,31 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private val ttsQueue = LinkedList<SpeechStatus>() // 语音提示队列
     private var paragraphs = mutableListOf<String>()
 
+    private var isSpeechEnabled = true // 默认启用语音播报
+    private val speechStatusSharedPreferences by lazy { getSharedPreferences("SpeechStatusPrefs", Context.MODE_PRIVATE) }
+
+    @SuppressLint("ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        // 加载语音播报状态
+        isSpeechEnabled = speechStatusSharedPreferences.getBoolean("isSpeechEnabled", false)
+
+        // 初始化语音播报切换按钮
+        val toggleSpeechButton = findViewById<ImageView>(R.id.toggle_speech_button)
+        toggleSpeechButton.setOnClickListener { toggleSpeech() }
+        updateToggleSpeechButtonIcon()
+
 
         // 初始化 TTS
         tts = TextToSpeech(this, this)
 
         // 初始化闪光灯按钮
-        flashButton =  findViewById(R.id.flash_button)
-        val flashButton: ImageView = findViewById(R.id.flash_button)
+        flashButton = findViewById(R.id.flash_button)
         flashButton.setOnClickListener { toggleFlash() }
 
-        // 初始化视图
-        previewView = findViewById(R.id.preview_view) // 确保 ID 匹配
+        previewView = findViewById(R.id.preview_view)
         val captureButton: ImageView = findViewById(R.id.capture_button)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
@@ -93,7 +108,23 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         checkAndRequestPermissions()
 
         captureButton.setOnClickListener {
+            // 禁用按钮，防止多次触发
+            it.isEnabled = false
             takePhoto()
+        }
+
+        // 添加对焦功能
+        previewView.setOnTouchListener { _, event ->
+            if (event.action == MotionEvent.ACTION_DOWN) {
+                val x = event.x
+                val y = event.y
+                val meteringPoint = previewView.meteringPointFactory.createPoint(x, y)
+                val focusMeteringAction = FocusMeteringAction.Builder(meteringPoint).build()
+                cameraControl?.startFocusAndMetering(focusMeteringAction)
+                true
+            } else {
+                false
+            }
         }
     }
 
@@ -178,14 +209,20 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             imageCapture = ImageCapture.Builder().build()
 
             try {
-                // 绑定并获取 Camera 实例
                 val camera = cameraProvider.bindToLifecycle(
                     this,
                     cameraSelector,
                     preview,
                     imageCapture
                 )
-                cameraControl = camera.cameraControl // 获取 CameraControl
+                cameraControl = camera.cameraControl
+
+                // 设置自动对焦
+                val meteringPointFactory = previewView.meteringPointFactory
+                val point = meteringPointFactory.createPoint(0.5f, 0.5f) // 默认对焦在画面中心
+                val focusMeteringAction = FocusMeteringAction.Builder(point).build()
+
+                cameraControl?.startFocusAndMetering(focusMeteringAction)
             } catch (ex: Exception) {
                 Log.e("Camera", "绑定失败", ex)
             }
@@ -195,8 +232,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun takePhoto() {
         val imageCapture = imageCapture ?: return
 
-        addSpeechToQueue(SpeechStatus.UPLOAD_START)
-        addSpeechToQueue(SpeechStatus.PROCESSING)
         // 确保使用当前闪光灯状态
         imageCapture.flashMode = if (isFlashOn) ImageCapture.FLASH_MODE_ON
         else ImageCapture.FLASH_MODE_OFF
@@ -208,13 +243,23 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     val bitmap = image.toBitmap()
                     image.close()
                     processImage(bitmap)
+                    // 恢复按钮可用状态
+                    findViewById<ImageView>(R.id.capture_button).isEnabled = true
                 }
 
                 override fun onError(exception: ImageCaptureException) {
                     Log.e("Camera", "Photo capture failed: ${exception.message}")
+                    // 恢复按钮可用状态
+                    findViewById<ImageView>(R.id.capture_button).isEnabled = true
                 }
             }
         )
+    }
+
+    // 在 MainActivity 中添加 onResume 方法
+    override fun onResume() {
+        super.onResume()
+        hasNavigated = false // 重置跳转标志
     }
 
     private fun processImage(bitmap: Bitmap) {
@@ -255,11 +300,34 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     // 新增语音队列管理
     private fun addSpeechToQueue(status: SpeechStatus) {
+        if (!isSpeechEnabled) return // 如果语音被禁用，直接返回不执行
         synchronized(ttsQueue) {
             ttsQueue.add(status)
         }
         runOnUiThread { processSpeechQueue() }
     }
+
+
+    // 添加方法更新按钮图标
+    private fun updateToggleSpeechButtonIcon() {
+        val toggleSpeechButton = findViewById<ImageView>(R.id.toggle_speech_button)
+        val iconRes = if (isSpeechEnabled) R.drawable.ic_volume_up else R.drawable.ic_volume_off
+        toggleSpeechButton.setImageResource(iconRes)
+    }
+
+    // 添加一个方法用于切换语音播报状态
+    private fun toggleSpeech() {
+        isSpeechEnabled = !isSpeechEnabled
+        speechStatusSharedPreferences.edit().putBoolean("isSpeechEnabled", isSpeechEnabled).apply()
+        updateToggleSpeechButtonIcon()
+
+        if (isSpeechEnabled) {
+            Toast.makeText(this, "语音播报已启用", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(this, "语音播报已禁用", Toast.LENGTH_SHORT).show()
+        }
+    }
+
 
     // 处理语音队列
     private fun processSpeechQueue() {
@@ -302,7 +370,22 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         tts.speak(text, TextToSpeech.QUEUE_ADD, null, utteranceId)
     }
 
+    private fun triggerNavigation() {
+        runOnUiThread {
+            if (!hasNavigated) {
+                hasNavigated = true
+                val intent = Intent(this@MainActivity, ResultActivity::class.java).apply {
+                    putExtra("ocr_result", paragraphs.toTypedArray())
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                startActivity(intent)
+            }
+        }
+    }
+
+
     // 语音播报并跳转
+    // 修改 speakAndNavigate 方法，确保语音播报关闭时不会重复触发
     private fun speakAndNavigate() {
         val utteranceId = "navigate_${System.currentTimeMillis()}"
         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
@@ -311,9 +394,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 if (!hasNavigated) {
                     hasNavigated = true
                     runOnUiThread {
-                        startActivity(Intent(this@MainActivity, ResultActivity::class.java).apply {
+                        val intent = Intent(this@MainActivity, ResultActivity::class.java).apply {
                             putExtra("ocr_result", paragraphs.toTypedArray())
-                        })
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        startActivity(intent)
                     }
                 }
             }
@@ -433,11 +518,22 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
 
             // 添加跳转逻辑到语音队列
-            addSpeechToQueue(SpeechStatus.NAVIGATING)
+            if (isSpeechEnabled) {
+                addSpeechToQueue(SpeechStatus.NAVIGATING)
+            } else {
+                // 如果语音播报关闭，直接触发跳转
+                triggerNavigation()
+            }
 
         } catch (e: Exception) {
             Log.e("Parse Error", "解析响应失败: ${e.message}")
-            addSpeechToQueue(SpeechStatus.FAILURE) // 添加失败提示到队列
+            if (isSpeechEnabled) {
+                addSpeechToQueue(SpeechStatus.FAILURE)
+            } else {
+                runOnUiThread {
+                    Toast.makeText(this, "识别失败，请重试", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
 

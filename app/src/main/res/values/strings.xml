@@ -6,4 +6,6 @@
     <string name="btnToggleDirection">切换内容滑动方向</string>
     <string name="increase_font_size">+</string>
     <string name="decrease_font_size">-</string>
+    <string name="toggle_speech_button">"切换语音播报状态"</string>
+    <string name="AutoRead">开启自动播报</string>
 </resources>

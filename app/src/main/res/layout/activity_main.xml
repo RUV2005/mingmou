@@ -39,8 +39,7 @@
         android:layout_marginTop="16dp"
         android:layout_marginEnd="16dp"
         app:cardCornerRadius="40dp"
-        app:cardElevation="4dp"
-        >
+        app:cardElevation="4dp">
 
         <ImageView
             android:id="@+id/flash_button"
@@ -50,5 +49,25 @@
             android:gravity="center"
             android:scaleType="center"
             android:src="@drawable/ic_flash_off" />
+    </androidx.cardview.widget.CardView>
+
+    <!-- 语音播报切换按钮 -->
+    <androidx.cardview.widget.CardView
+        android:layout_width="72dp"
+        android:layout_height="72dp"
+        android:layout_gravity="top|start"
+        android:layout_marginTop="16dp"
+        android:layout_marginStart="16dp"
+        app:cardCornerRadius="40dp"
+        app:cardElevation="4dp">
+
+        <ImageView
+            android:id="@+id/toggle_speech_button"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="@string/toggle_speech_button"
+            android:gravity="center"
+            android:scaleType="center"
+            android:src="@drawable/ic_volume_off" />
     </androidx.cardview.widget.CardView>
 </FrameLayout>

@@ -29,6 +29,8 @@ class ResultActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var isTTsInitialized = false
     private var isTTsBound = false
     private var isVerticalScroll = true // 默认为垂直滑动
+    private var isAutoReadingEnabled = false // 默认关闭自动播报
+    private val prefs by lazy { getPreferences(Context.MODE_PRIVATE) }
     // 添加自动朗读相关变量
     private var isAutoReading = false
     private var currentAutoReadIndex = 0
@@ -42,13 +44,12 @@ class ResultActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
         // 加载用户设置
         loadTextSizeSettings()
+        loadAutoReadSettings() // 新增加载自动播报设置
 
         // 初始化列表数据
         intent.getStringArrayExtra("ocr_result")?.let {
             paragraphs.addAll(it.toList())
         }
-
-
 
         // 初始化RecyclerView
         val recyclerView = findViewById<RecyclerView>(R.id.recyclerView)
@@ -58,6 +59,18 @@ class ResultActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         initFontControls()
         // 初始化滑动方向切换按钮
         initToggleDirectionButton(recyclerView)
+        // 初始化自动播报控制按钮
+        initAutoReadControl()
+    }
+
+    // 新增方法：加载自动播报设置
+    private fun loadAutoReadSettings() {
+        isAutoReadingEnabled = prefs.getBoolean("autoReadEnabled", false)
+    }
+
+    // 修改方法：保存自动播报设置
+    private fun saveAutoReadSettings(enabled: Boolean) {
+        prefs.edit().putBoolean("autoReadEnabled", enabled).apply()
     }
 
 
@@ -120,6 +133,34 @@ class ResultActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             speakParagraph(position)
         }
         recyclerView.adapter = adapter
+    }
+
+    // 修改方法：初始化自动播报控制
+    private fun initAutoReadControl() {
+        val autoReadButton = findViewById<Button>(R.id.btnAutoRead)
+
+        // 根据保存的状态设置按钮文本
+        if (isAutoReadingEnabled) {
+            autoReadButton.text = "关闭自动播报"
+        } else {
+            autoReadButton.text = "开启自动播报"
+        }
+
+        autoReadButton.setOnClickListener {
+            isAutoReadingEnabled = !isAutoReadingEnabled
+            saveAutoReadSettings(isAutoReadingEnabled) // 保存状态
+
+            if (isAutoReadingEnabled) {
+                autoReadButton.text = "关闭自动播报"
+                if (isTTsInitialized && isTTsBound) {
+                    startAutoRead()
+                }
+            } else {
+                autoReadButton.text = "开启自动播报"
+                isAutoReading = false
+                tts.stop()
+            }
+        }
     }
 
     @SuppressLint("NotifyDataSetChanged")
@@ -219,6 +260,7 @@ class ResultActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
     // 正确的onInit实现位置
+    // 修改方法：TTS初始化
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
             isTTsInitialized = true
@@ -229,7 +271,11 @@ class ResultActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 }
                 else -> {
                     isTTsBound = true
-                    startAutoRead()  // 自动朗读入口
+
+                    // 根据保存的状态决定是否启动自动播报
+                    if (isAutoReadingEnabled) {
+                        startAutoRead()
+                    }
                 }
             }
         } else {
