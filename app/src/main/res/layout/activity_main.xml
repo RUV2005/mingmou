@@ -89,7 +89,7 @@
             android:id="@+id/mode_button"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:contentDescription="@string/toggle_speech_button"
+            android:contentDescription="@string/scan_mode_button"
             android:gravity="center"
             android:scaleType="center"
             android:src="@drawable/ic_mode_manual" />
