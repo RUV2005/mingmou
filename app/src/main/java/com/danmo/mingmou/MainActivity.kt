@@ -6,6 +6,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -29,6 +31,9 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -76,7 +81,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         PROCESSING,      // 正在识别
         SUCCESS,         // 识别成功
         FAILURE,         // 识别失败
-        NAVIGATING       // 正在跳转
+        NAVIGATING,       // 正在跳转
+        OFFLINE_MODE     // 离线模式
     }
 
     private lateinit var tts: TextToSpeech
@@ -85,6 +91,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private val ttsQueue = LinkedList<SpeechStatus>() // 语音提示队列
     private var paragraphs = mutableListOf<String>()
 
+    private var isOfflineModeReported = false // 添加一个标志位
     private var isSpeechEnabled = true // 默认启用语音播报
     private val speechStatusSharedPreferences by lazy { getSharedPreferences("SpeechStatusPrefs", Context.MODE_PRIVATE) }
     private val preferences by lazy { getSharedPreferences("AppPrefs", Context.MODE_PRIVATE) }
@@ -93,6 +100,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
 
         // 加载语音播报状态
         isSpeechEnabled = speechStatusSharedPreferences.getBoolean("isSpeechEnabled", false)
@@ -146,6 +154,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         updateModeUI() // 确保在 modeButton 初始化后调用
 
         detectionOverlayView = findViewById(R.id.detection_overlay_view) // 假设你在布局文件中添加了这个自定义 View
+    }
+
+    private fun isNetworkAvailable(): Boolean {
+        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val activeNetwork = connectivityManager.activeNetwork
+        val networkCapabilities = connectivityManager.getNetworkCapabilities(activeNetwork)
+        return networkCapabilities != null &&
+                (networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                        networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR))
     }
 
     // 新增 TTS 初始化回调
@@ -372,6 +389,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             Log.d("Camera", "识别正在进行，暂停拍照")
             return
         }
+        // 添加离线模式提示
+        if (!isNetworkAvailable()) {
+            addSpeechToQueue(SpeechStatus.OFFLINE_MODE)
+        }
 
         val imageCapture = imageCapture ?: return
 
@@ -412,47 +433,120 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun processImage(bitmap: Bitmap) {
         Thread {
             try {
-                addSpeechToQueue(SpeechStatus.UPLOAD_START) // 开始上传
-
-                // 压缩图片并转换为 Base64
-                val byteArrayOutputStream = ByteArrayOutputStream()
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 80, byteArrayOutputStream)
-                val imageBase64 = Base64.encodeToString(byteArrayOutputStream.toByteArray(), Base64.DEFAULT)
-
-                addSpeechToQueue(SpeechStatus.PROCESSING) // 正在识别
-                // 构造请求
-                val url = buildRequestUrl()
-                val jsonBody = buildRequestBody(imageBase64)
-
-                val client = OkHttpClient()
-                val request = Request.Builder()
-                    .url(url)
-                    .post(jsonBody.toRequestBody("application/json".toMediaType()))
-                    .build()
-
-                val response = client.newCall(request).execute()
-                val responseBody = response.body?.string()
-
-                if (response.isSuccessful && responseBody != null) {
-                    addSpeechToQueue(SpeechStatus.SUCCESS)
-                    parseResponse(responseBody) // parseResponse 内部会添加 NAVIGATING 状态
+                if (isNetworkAvailable()) {
+                    processImageOnline(bitmap)
                 } else {
-                    addSpeechToQueue(SpeechStatus.FAILURE)
+                    if (!isOfflineModeReported) { // 检查是否已报告离线模式
+                        runOnUiThread {
+                            addSpeechToQueue(SpeechStatus.OFFLINE_MODE)
+                            isOfflineModeReported = true // 设置标志位
+                        }
+                    }
+                    processImageOffline(bitmap)
                 }
-            } catch (e: Exception) {
-                addSpeechToQueue(SpeechStatus.FAILURE)
+            } catch (_: Exception) {
             } finally {
-                // 识别结束，恢复拍照逻辑
                 isProcessing = false
+                isOfflineModeReported = false // 重置标志位
             }
         }.start()
     }
+
+
+
+    private fun processImageOffline(bitmap: Bitmap) {
+        // 先添加处理中状态（此时已在UI线程）
+        addSpeechToQueue(SpeechStatus.PROCESSING)
+
+        val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
+        val image = InputImage.fromBitmap(bitmap, 0)
+
+        recognizer.process(image)
+            .addOnSuccessListener { visionText ->
+                paragraphs.clear()
+                val currentParagraph = StringBuilder()
+
+                visionText.textBlocks.forEach { block ->
+                    block.lines.forEach { line ->
+                        val lineText = line.text
+                        currentParagraph.append(lineText).append(" ")
+
+                        if (lineText.endsWith("。") || lineText.endsWith("!") || lineText.endsWith("?")) {
+                            paragraphs.add(currentParagraph.toString().trim())
+                            currentParagraph.clear()
+                        }
+                    }
+                }
+
+                if (currentParagraph.isNotEmpty()) {
+                    paragraphs.add(currentParagraph.toString().trim())
+                }
+
+                runOnUiThread {
+                    addSpeechToQueue(SpeechStatus.SUCCESS)
+                    addSpeechToQueue(SpeechStatus.NAVIGATING)
+                }
+            }
+            .addOnFailureListener {
+                runOnUiThread {
+                    addSpeechToQueue(SpeechStatus.FAILURE)
+                }
+            }
+    }
+
+    private fun processImageOnline(bitmap: Bitmap) {
+
+        try {
+            addSpeechToQueue(SpeechStatus.UPLOAD_START) // 开始上传
+
+            // 压缩图片并转换为 Base64
+            val byteArrayOutputStream = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 80, byteArrayOutputStream)
+            val imageBase64 = Base64.encodeToString(byteArrayOutputStream.toByteArray(), Base64.DEFAULT)
+
+            addSpeechToQueue(SpeechStatus.PROCESSING) // 正在识别
+            // 构造请求
+            val url = buildRequestUrl()
+            val jsonBody = buildRequestBody(imageBase64)
+
+            val client = OkHttpClient()
+            val request = Request.Builder()
+                .url(url)
+                .post(jsonBody.toRequestBody("application/json".toMediaType()))
+                .build()
+
+            val response = client.newCall(request).execute()
+            val responseBody = response.body?.string()
+
+            if (response.isSuccessful && responseBody != null) {
+                addSpeechToQueue(SpeechStatus.SUCCESS)
+                parseResponse(responseBody) // parseResponse 内部会添加 NAVIGATING 状态
+            } else {
+                addSpeechToQueue(SpeechStatus.FAILURE)
+            }
+        } catch (e: Exception) {
+            addSpeechToQueue(SpeechStatus.FAILURE)
+        } finally {
+            // 识别结束，恢复拍照逻辑
+            isProcessing = false
+        }
+
+
+    }
+
+
+
+
+
+
 
     // 新增语音队列管理
     private fun addSpeechToQueue(status: SpeechStatus) {
         if (!isSpeechEnabled) return // 如果语音被禁用，直接返回不执行
         synchronized(ttsQueue) {
-            ttsQueue.add(status)
+            if (!ttsQueue.contains(status)) { // 检查队列中是否已存在相同任务
+                ttsQueue.add(status)
+            }
         }
         runOnUiThread { processSpeechQueue() }
     }
@@ -493,29 +587,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
         synchronized(ttsQueue) {
             if (ttsQueue.isNotEmpty() && !tts.isSpeaking) {
-                val status = ttsQueue.poll() ?: return // 如果为 null 直接返回
+                val status = ttsQueue.poll() ?: return
                 when (status) {
-                    SpeechStatus.UPLOAD_START -> speakWithCallback("开始上传图片") {
-                        processSpeechQueue() // 处理下一个状态
-                    }
-                    SpeechStatus.PROCESSING -> speakWithCallback("正在识别内容") {
+                    SpeechStatus.UPLOAD_START -> speakWithCallback("开始上传图片") { processSpeechQueue() }
+                    SpeechStatus.OFFLINE_MODE -> speakWithCallback("网络异常，已切换至离线模式") {
+                        ttsQueue.removeAll { it == SpeechStatus.OFFLINE_MODE } // 清空队列中相同的任务
                         processSpeechQueue()
                     }
-                    SpeechStatus.SUCCESS -> {
-                        speakWithCallback("识别成功") {
-                            // 识别成功后停止拍照
-                            currentMode = CaptureMode.MANUAL
-                            processSpeechQueue()
-                        }
-                    }
-                    SpeechStatus.FAILURE -> {
-                        speakWithCallback("识别失败，请重试") {
-                            // 识别失败后停止拍照
-                            currentMode = CaptureMode.MANUAL
-                            processSpeechQueue()
-                        }
-                    }
-                    SpeechStatus.NAVIGATING -> speakAndNavigate() // 跳转逻辑
+                    SpeechStatus.PROCESSING -> speakWithCallback("正在识别内容") { processSpeechQueue() }
+                    SpeechStatus.SUCCESS -> speakWithCallback("识别成功") { processSpeechQueue() }
+                    SpeechStatus.NAVIGATING -> speakAndNavigate()
+                    SpeechStatus.FAILURE -> speakWithCallback("识别失败，请重试") { processSpeechQueue() }
                 }
             }
         }
@@ -551,7 +633,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
 
     // 语音播报并跳转
-    // 修改 speakAndNavigate 方法，确保语音播报关闭时不会重复触发
     private fun speakAndNavigate() {
         val utteranceId = "navigate_${System.currentTimeMillis()}"
         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {

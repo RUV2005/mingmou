@@ -19,7 +19,7 @@ class AutoCaptureAnalyzer(
     @androidx.annotation.OptIn(ExperimentalGetImage::class)
     override fun analyze(imageProxy: ImageProxy) {
         val currentTime = System.currentTimeMillis()
-        if (currentTime - lastTriggerTime < 1000) { // 1秒防抖
+        if (currentTime - lastTriggerTime < 2000) { // 2秒防抖
             imageProxy.close()
             return
         }
