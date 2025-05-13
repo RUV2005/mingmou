@@ -5,6 +5,10 @@
     android:layout_height="match_parent"
     tools:ignore="MergeRootFrame">
 
+    <com.danmo.mingmou.DetectionOverlayView
+        android:id="@+id/detection_overlay_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
     <!-- PreviewView 在底层 -->
     <androidx.camera.view.PreviewView
         android:id="@+id/preview_view"
@@ -70,4 +74,25 @@
             android:scaleType="center"
             android:src="@drawable/ic_volume_off" />
     </androidx.cardview.widget.CardView>
+
+    <!-- 语音播报切换按钮 -->
+    <androidx.cardview.widget.CardView
+        android:layout_width="72dp"
+        android:layout_height="72dp"
+        android:layout_gravity="top|center"
+        android:layout_marginTop="16dp"
+        android:layout_marginStart="16dp"
+        app:cardCornerRadius="40dp"
+        app:cardElevation="4dp">
+
+        <ImageView
+            android:id="@+id/mode_button"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="@string/toggle_speech_button"
+            android:gravity="center"
+            android:scaleType="center"
+            android:src="@drawable/ic_mode_manual" />
+    </androidx.cardview.widget.CardView>
+
 </FrameLayout>

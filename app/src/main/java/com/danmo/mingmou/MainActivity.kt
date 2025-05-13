@@ -7,6 +7,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Base64
@@ -19,6 +21,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraControl
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
@@ -44,6 +47,9 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
+    private enum class CaptureMode { AUTO, MANUAL }
+    private var currentMode = CaptureMode.MANUAL
+    private lateinit var modeButton: ImageView
     private var isFlashOn = false
     private lateinit var flashButton: ImageView
     private lateinit var cameraExecutor: ExecutorService
@@ -52,6 +58,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var cameraControl: CameraControl? = null
     // 修复后的跳转方法
     private var hasNavigated = false // 添加跳转标志
+    private lateinit var detectionOverlayView: DetectionOverlayView
+    private var lastCaptureTime = 0L // 上一次拍照的时间
+    private val captureCooldown = 2000L // 拍照冷却时间（毫秒）
+    private var isProcessing = false // 是否正在处理识别
 
 
     companion object {
@@ -77,6 +87,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private var isSpeechEnabled = true // 默认启用语音播报
     private val speechStatusSharedPreferences by lazy { getSharedPreferences("SpeechStatusPrefs", Context.MODE_PRIVATE) }
+    private val preferences by lazy { getSharedPreferences("AppPrefs", Context.MODE_PRIVATE) }
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -91,13 +102,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         toggleSpeechButton.setOnClickListener { toggleSpeech() }
         updateToggleSpeechButtonIcon()
 
-
         // 初始化 TTS
         tts = TextToSpeech(this, this)
 
         // 初始化闪光灯按钮
         flashButton = findViewById(R.id.flash_button)
         flashButton.setOnClickListener { toggleFlash() }
+
+        // 初始化 modeButton
+        modeButton = findViewById(R.id.mode_button) // 确保在 updateModeUI 之前初始化
+        modeButton.setOnClickListener { toggleCaptureMode() }
 
         previewView = findViewById(R.id.preview_view)
         val captureButton: ImageView = findViewById(R.id.capture_button)
@@ -126,6 +140,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 false
             }
         }
+
+        // 加载保存的识别模式
+        currentMode = loadCaptureMode()
+        updateModeUI() // 确保在 modeButton 初始化后调用
+
+        detectionOverlayView = findViewById(R.id.detection_overlay_view) // 假设你在布局文件中添加了这个自定义 View
     }
 
     // 新增 TTS 初始化回调
@@ -144,6 +164,43 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
         }
     }
+
+    // 添加模式切换方法
+    private fun toggleCaptureMode() {
+        currentMode = when (currentMode) {
+            CaptureMode.MANUAL -> CaptureMode.AUTO
+            CaptureMode.AUTO -> CaptureMode.MANUAL
+        }
+        updateModeUI()
+        setupAnalysisUseCase()
+
+        val modeName = when (currentMode) {
+            CaptureMode.AUTO -> "自动"
+            CaptureMode.MANUAL -> "手动"
+        }
+
+        // 修改判断条件为 isSpeechEnabled
+        if (isSpeechEnabled) { // 这里替换为语音总开关
+            synchronized(ttsQueue) {
+                ttsQueue.clear()
+            }
+            speakWithCallback("当前模式已切换为${modeName}模式") {
+                processSpeechQueue()
+            }
+        }
+
+        saveCaptureMode(currentMode)
+        Toast.makeText(this, "当前模式: ${currentMode.name}", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun updateModeUI() {
+        val iconRes = when (currentMode) {
+            CaptureMode.AUTO -> R.drawable.ic_mode_auto
+            CaptureMode.MANUAL -> R.drawable.ic_mode_manual
+        }
+        modeButton.setImageResource(iconRes)
+    }
+
 
     private fun checkAndRequestPermissions() {
         if (ContextCompat.checkSelfPermission(
@@ -196,6 +253,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         flashButton.setImageResource(iconRes) // 使用 setImageResource 替代 icon
     }
 
+    // 修改startCamera方法
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
@@ -206,7 +264,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 surfaceProvider = previewView.surfaceProvider
             }
 
-            imageCapture = ImageCapture.Builder().build()
+            imageCapture = ImageCapture.Builder()
+                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                .build()
+
+            setupAnalysisUseCase()
 
             try {
                 val camera = cameraProvider.bindToLifecycle(
@@ -229,7 +291,88 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }, ContextCompat.getMainExecutor(this))
     }
 
+    private fun saveCaptureMode(mode: CaptureMode) {
+        val editor = preferences.edit()
+        editor.putString("capture_mode", mode.name)
+        editor.apply()
+    }
+
+    private fun loadCaptureMode(): CaptureMode {
+        val modeName = preferences.getString("capture_mode", CaptureMode.MANUAL.name)
+        return CaptureMode.valueOf(modeName!!)
+    }
+
+
+    // 新增分析方法
+    private fun setupAnalysisUseCase() {
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
+        cameraProviderFuture.addListener({
+            val cameraProvider = cameraProviderFuture.get()
+            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+
+            cameraProvider.unbindAll()
+
+            val preview = Preview.Builder().build().apply {
+                surfaceProvider = previewView.surfaceProvider
+            }
+
+            imageCapture = ImageCapture.Builder()
+                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                .build()
+
+            if (currentMode == CaptureMode.AUTO) {
+                val analysisUseCase = ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .build()
+
+                analysisUseCase.setAnalyzer(
+                    cameraExecutor,
+                    AutoCaptureAnalyzer { hasText, _ ->
+                        runOnUiThread {
+                            if (hasText) autoCapture()
+                        }
+                    }
+                )
+
+                cameraProvider.bindToLifecycle(
+                    this, cameraSelector, preview, imageCapture, analysisUseCase
+                )
+            } else {
+                cameraProvider.bindToLifecycle(
+                    this, cameraSelector, preview, imageCapture
+                )
+            }
+        }, ContextCompat.getMainExecutor(this))
+    }
+
+
+    // 自动拍照逻辑
+    private fun autoCapture() {
+        if (currentMode != CaptureMode.AUTO) return
+
+        val currentTime = System.currentTimeMillis()
+        if (currentTime - lastCaptureTime < captureCooldown) {
+            // 如果距离上次拍照时间小于冷却时间，则不拍照
+            return
+        }
+
+        lastCaptureTime = currentTime // 更新上次拍照时间
+
+        val captureButton = findViewById<ImageView>(R.id.capture_button)
+        captureButton.isEnabled = false
+        takePhoto()
+        Handler(Looper.getMainLooper()).postDelayed({
+            captureButton.isEnabled = true
+        }, captureCooldown)
+    }
+
+
     private fun takePhoto() {
+        if (isProcessing) {
+            Log.d("Camera", "识别正在进行，暂停拍照")
+            return
+        }
+
         val imageCapture = imageCapture ?: return
 
         // 确保使用当前闪光灯状态
@@ -242,7 +385,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 override fun onCaptureSuccess(image: ImageProxy) {
                     val bitmap = image.toBitmap()
                     image.close()
+
+                    // 设置正在处理识别
+                    isProcessing = true
                     processImage(bitmap)
+
                     // 恢复按钮可用状态
                     findViewById<ImageView>(R.id.capture_button).isEnabled = true
                 }
@@ -294,6 +441,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 }
             } catch (e: Exception) {
                 addSpeechToQueue(SpeechStatus.FAILURE)
+            } finally {
+                // 识别结束，恢复拍照逻辑
+                isProcessing = false
             }
         }.start()
     }
@@ -323,8 +473,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
         if (isSpeechEnabled) {
             Toast.makeText(this, "语音播报已启用", Toast.LENGTH_SHORT).show()
+            // 新增语音播报
+            speakWithCallback("语音播报已启用") {
+                // 语音播报完成后不做额外操作
+            }
         } else {
             Toast.makeText(this, "语音播报已禁用", Toast.LENGTH_SHORT).show()
+            // 新增语音播报
+            speakWithCallback("语音播报已禁用") {
+                // 语音播报完成后不做额外操作
+            }
         }
     }
 
@@ -343,11 +501,19 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     SpeechStatus.PROCESSING -> speakWithCallback("正在识别内容") {
                         processSpeechQueue()
                     }
-                    SpeechStatus.SUCCESS -> speakWithCallback("识别成功") {
-                        processSpeechQueue()
+                    SpeechStatus.SUCCESS -> {
+                        speakWithCallback("识别成功") {
+                            // 识别成功后停止拍照
+                            currentMode = CaptureMode.MANUAL
+                            processSpeechQueue()
+                        }
                     }
-                    SpeechStatus.FAILURE -> speakWithCallback("识别失败，请重试") {
-                        processSpeechQueue()
+                    SpeechStatus.FAILURE -> {
+                        speakWithCallback("识别失败，请重试") {
+                            // 识别失败后停止拍照
+                            currentMode = CaptureMode.MANUAL
+                            processSpeechQueue()
+                        }
                     }
                     SpeechStatus.NAVIGATING -> speakAndNavigate() // 跳转逻辑
                 }

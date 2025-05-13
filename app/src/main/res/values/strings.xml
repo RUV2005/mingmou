@@ -8,4 +8,5 @@
     <string name="decrease_font_size">-</string>
     <string name="toggle_speech_button">"切换语音播报状态"</string>
     <string name="AutoRead">开启自动播报</string>
+
 </resources>
