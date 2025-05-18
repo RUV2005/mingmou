@@ -9,4 +9,5 @@
     <string name="toggle_speech_button">"切换语音播报状态"</string>
     <string name="scan_mode_button">扫描模式切换</string>
     <string name="AutoRead">开启自动播报</string>
+    <string name="camera_switch_button">切换摄像头</string> <!-- 中文 -->
 </resources>
