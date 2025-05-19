@@ -258,7 +258,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 stopCamera()
                 startStream()
                 isCameraMode = false
-                findViewById<ImageView>(R.id.camera_switch_button).setImageResource(R.drawable.ic_camera)
                 addSpeechToQueue(SpeechStatus.STREAM_MODE)
             } else {
                 // 切换到摄像头模式
@@ -267,7 +266,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 stopStream()
                 startCamera()
                 isCameraMode = true
-                findViewById<ImageView>(R.id.camera_switch_button).setImageResource(R.drawable.ic_camera_switch)
                 addSpeechToQueue(SpeechStatus.CAMERA_MODE)
             }
         }
@@ -467,6 +465,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     imageCapture
                 )
                 cameraControl = camera.cameraControl
+
+                // 设置自动对焦
+                val meteringPointFactory = previewView.meteringPointFactory
+                val point = meteringPointFactory.createPoint(0.5f, 0.5f) // 默认对焦在画面中心
+                val focusMeteringAction = FocusMeteringAction.Builder(point).build()
+
+                cameraControl?.startFocusAndMetering(focusMeteringAction)
             } catch (ex: Exception) {
                 Log.e("Camera", "Binding failed", ex)
             }
