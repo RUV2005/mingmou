@@ -842,7 +842,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     /**
-     * 解析 API 响应。
+     * 解析 API 响应（完整修复版）
      * @param response 响应字符串
      */
     private fun parseResponse(response: String) {
@@ -857,7 +857,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
             val resultJson = JSONObject(decodedText)
             val pages = resultJson.getJSONArray("pages")
-            val paragraphEndings = setOf('。', '！', '？', '.', '!', '?', ';', '…')
+            val paragraphEndings = setOf('。', '！', '？', '.', '!', '?', ';', '；', '…')
             paragraphs = mutableListOf()
             val currentParagraph = StringBuilder()
 
@@ -867,27 +867,37 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
                 for (j in 0 until lines.length()) {
                     val line = lines.getJSONObject(j)
-                    val lineContent = buildLineContent(line)
+                    val rawLineContent = buildLineContent(line)
+                    val trimmedLine = rawLineContent.trimEnd()
 
-                    currentParagraph.append(lineContent)
-
+                    // 核心修复：优先检查标点结尾
                     when {
-                        lineContent.endsWithAny(paragraphEndings) -> {
+                        // 以段落结束符结尾
+                        trimmedLine.endsWithAny(paragraphEndings) -> {
+                            currentParagraph.append(trimmedLine)
                             paragraphs.add(currentParagraph.toString())
                             currentParagraph.clear()
                         }
 
-                        lineContent.endsWith("-") || lineContent.length < 15 -> {
-                            currentParagraph.append(" ")
+                        // 处理连字符（如英文单词换行）
+                        rawLineContent.endsWith("-") -> {
+                            currentParagraph.append(rawLineContent.dropLast(1)) // 移除连字符，直接拼接
                         }
 
+                        // 短行内容（如换行后的部分）
+                        rawLineContent.length < 15 -> {
+                            currentParagraph.append(rawLineContent).append(" ")
+                        }
+
+                        // 默认情况添加空格
                         else -> {
-                            currentParagraph.append(" ")
+                            currentParagraph.append(rawLineContent).append(" ")
                         }
                     }
                 }
             }
 
+            // 处理未闭合的段落
             if (currentParagraph.isNotEmpty()) {
                 paragraphs.add(currentParagraph.toString().trim())
             }
@@ -910,28 +920,31 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     /**
-     * 检查字符串是否以指定字符集中的任意字符结尾。
-     * @param chars 字符集
-     * @return 是否以指定字符结尾
+     * 检查字符串是否以指定字符结尾（扩展函数）
      */
     private fun String.endsWithAny(chars: Set<Char>): Boolean {
         return if (isNotEmpty()) chars.contains(last()) else false
     }
 
     /**
-     * 构建行内容。
-     * @param line 行数据
-     * @return 行内容字符串
+     * 构建行内容（优化空格处理）
      */
     private fun buildLineContent(line: JSONObject): String {
+        // 匹配中文之间的全角/半角空格（包括连续空格）
+        val hanSpaceRegex = Regex("(?<=\\p{Script=Han})[\\s　\u00A0]+(?=\\p{Script=Han})")
+
         return try {
             line.getJSONArray("word_units").let { wordUnits ->
                 (0 until wordUnits.length()).joinToString("") { index ->
                     wordUnits.getJSONObject(index).getString("content")
-                }
+                }.trim()
+                    .replace(hanSpaceRegex, "") // 删除中文之间的所有类型空格
+                    .replace("　", "") // 额外清理全角空格（保险措施）
             }
         } catch (e: Exception) {
-            line.optString("content", "")
+            line.optString("content", "").trim()
+                .replace(hanSpaceRegex, "")
+                .replace("　", "")
         }
     }
 
