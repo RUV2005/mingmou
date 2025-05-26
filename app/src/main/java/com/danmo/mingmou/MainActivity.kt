@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.ConnectivityManager
@@ -49,7 +50,10 @@ import java.util.concurrent.Executors
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import android.graphics.drawable.AnimationDrawable
+import android.view.GestureDetector
+import android.view.ScaleGestureDetector
 import android.view.View
+import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.core.graphics.drawable.toBitmap
 import androidx.core.view.WindowCompat
@@ -63,6 +67,9 @@ import kotlinx.coroutines.launch
 import java.io.IOException
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
+import androidx.appcompat.app.AlertDialog
+import androidx.camera.core.CameraInfo
+import androidx.core.content.edit
 
 /**
  * 主活动类，负责相机预览、拍照、图像识别和语音播报等功能。
@@ -84,7 +91,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         OFFLINE_MODE,    // 离线模式
         SERVICE_EXPIRED, // 在线服务到期
         STREAM_MODE,     // 视频流模式
-        CAMERA_MODE      // 摄像头模式
+        CAMERA_MODE,     // 摄像头模式
+        FALLBACK_TO_CAMERA   // 新增：流未连上自动回退
     }
 
     // 全局变量
@@ -100,6 +108,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var lastCaptureTime = 0L // 上一次拍照时间
     private val captureCooldown = 2000L // 拍照冷却时间（毫秒）
     private var isProcessing = false // 是否正在处理识别
+    private var hasStreamReadyDialogShown = false // 防止重复弹窗
     private val SERVICE_EXPIRY_DATE = Calendar.getInstance().apply {
         set(2025, Calendar.JULY, 24) // 在线服务到期时间
     }.timeInMillis
@@ -116,6 +125,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var connectionState = ConnectionState.DISCONNECTED
     private var connectionStartTime = 0L
     private var timerJob: Job? = null
+    private lateinit var scaleGestureDetector: ScaleGestureDetector
+    private var cameraInfo: CameraInfo? = null
 
     private lateinit var statusIndicator: View
     private lateinit var statusText: TextView
@@ -123,6 +134,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var isCameraMode = true // true 表示摄像头模式，false 表示视频流模式
     private lateinit var streamView: ImageView
     private var isCaptureRequested = false // 是否需要处理图像帧
+    private var isFullScreenPreview = false
+    private lateinit var gestureDetector: GestureDetector
+    private var lastZoomRatio = 1.0f
 
     // API和外置设备 配置
     companion object {
@@ -203,17 +217,54 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         // 设置拍照按钮点击事件
         captureButton.setOnClickListener {
             if (isCameraMode) {
-                // 如果是摄像头模式，正常调用拍照逻辑
                 takePhoto()
             } else {
-                // 如果是视频流模式，设置标志变量为 true
-                isCaptureRequested = true
+                captureFromStream()
             }
         }
+        gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDoubleTap(e: MotionEvent): Boolean {
+                if (resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
+                    toggleFullScreenPreview()
+                }
+                return true
+            }
+        })
+
+        scaleGestureDetector = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            private val SCALE_THRESHOLD = 0.05f // 捏合阈值，5%幅度内忽略
+
+            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                val scale = detector.scaleFactor
+                // 只有 scaleFactor 偏离 1.0 超过 5%，才允许缩放
+                if (kotlin.math.abs(scale - 1.0f) < SCALE_THRESHOLD) {
+                    return false // 忽略微小缩放
+                }
+                val control = cameraControl ?: return false
+                val info = cameraInfo ?: return false
+                val min = info.zoomState.value?.minZoomRatio ?: 1.0f
+                val max = info.zoomState.value?.maxZoomRatio ?: 10.0f
+                var newZoom = lastZoomRatio * scale
+                newZoom = newZoom.coerceIn(min, max)
+                control.setZoomRatio(newZoom)
+                return true
+            }
+
+            override fun onScaleEnd(detector: ScaleGestureDetector) {
+                cameraInfo?.zoomState?.value?.zoomRatio?.let {
+                    lastZoomRatio = it
+                }
+            }
+        })
 
         // 添加对焦功能
         previewView.setOnTouchListener { _, event ->
-            if (event.action == MotionEvent.ACTION_DOWN) {
+            val handled = scaleGestureDetector.onTouchEvent(event)
+            if (!handled) gestureDetector.onTouchEvent(event)
+            gestureDetector.onTouchEvent(event)
+            scaleGestureDetector.onTouchEvent(event)
+            // 保持原有的对焦逻辑
+            if (event.action == MotionEvent.ACTION_DOWN && !isFullScreenPreview) {
                 val x = event.x
                 val y = event.y
                 val meteringPoint = previewView.meteringPointFactory.createPoint(x, y)
@@ -237,6 +288,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         // 加载保存的识别模式
         currentMode = loadCaptureMode()
         updateModeUI()
+
+        streamView.setOnTouchListener { _, event ->
+            gestureDetector.onTouchEvent(event)
+            true
+        }
     }
 
     private fun setupImmersiveMode() {
@@ -259,8 +315,25 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 startStream()
                 isCameraMode = false
                 addSpeechToQueue(SpeechStatus.STREAM_MODE)
+
+                // 延迟检测流连接状态
+                handler.postDelayed({
+                    if (connectionState != ConnectionState.CONNECTED) {
+                        previewView.visibility = View.VISIBLE
+                        streamView.visibility = View.GONE
+                        startCamera()
+                        isCameraMode = true
+                        addSpeechToQueue(SpeechStatus.CAMERA_MODE)
+                        // 优雅：自定义的fallback语音也排入TTS队列
+                        addSpeechToQueue(SpeechStatus.FALLBACK_TO_CAMERA)
+                        Toast.makeText(
+                            this,
+                            "视频流未连接，已切回内置摄像头，后台继续重连。",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }, 1200)
             } else {
-                // 切换到摄像头模式
                 previewView.visibility = View.VISIBLE
                 streamView.visibility = View.GONE
                 stopStream()
@@ -270,6 +343,47 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
         }
     }
+
+
+    private fun toggleFullScreenPreview() {
+        isFullScreenPreview = !isFullScreenPreview
+        val resultContainer = findViewById<View>(R.id.result_container)
+        val hasResult = supportFragmentManager.findFragmentById(R.id.result_container) != null
+        // 如果你用的是往 result_container 里 addView，判断 resultContainer.childCount > 0 也可以
+
+        if (isFullScreenPreview) {
+            // 进入全屏
+            if (!hasResult) {
+                resultContainer?.visibility = View.GONE
+            } else {
+                resultContainer?.visibility = View.VISIBLE
+            }
+            findViewById<View>(R.id.mode_button_card)?.visibility = View.GONE
+            findViewById<View>(R.id.flash_button_card)?.visibility = View.GONE
+            findViewById<View>(R.id.capture_button_card)?.visibility = View.GONE
+            findViewById<View>(R.id.statusIndicator)?.visibility = View.GONE
+            findViewById<View>(R.id.statusText)?.visibility = View.GONE
+            findViewById<View>(R.id.timerText)?.visibility = View.GONE
+            findViewById<View>(R.id.toggle_speech_button_card)?.visibility = View.GONE
+            findViewById<View>(R.id.camera_switch_button_card)?.visibility = View.GONE
+        } else {
+            // 退出全屏
+            if (!hasResult) {
+                resultContainer?.visibility = View.GONE
+            } else {
+                resultContainer?.visibility = View.VISIBLE
+            }
+            findViewById<View>(R.id.mode_button_card)?.visibility = View.VISIBLE
+            findViewById<View>(R.id.flash_button_card)?.visibility = View.VISIBLE
+            findViewById<View>(R.id.capture_button_card)?.visibility = View.VISIBLE
+            findViewById<View>(R.id.statusIndicator)?.visibility = View.VISIBLE
+            findViewById<View>(R.id.statusText)?.visibility = View.VISIBLE
+            findViewById<View>(R.id.timerText)?.visibility = View.VISIBLE
+            findViewById<View>(R.id.toggle_speech_button_card)?.visibility = View.VISIBLE
+            findViewById<View>(R.id.camera_switch_button_card)?.visibility = View.VISIBLE
+        }
+    }
+
 
     // 停止摄像头预览
     private fun stopCamera() {
@@ -299,6 +413,29 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         } catch (e: InterruptedException) {
             Log.e("Stream", "Failed to shutdown OkHttpClient dispatcher", e)
         }
+    }
+
+
+    private fun showResult(paragraphs: Array<String>) {
+        if (resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
+            // 横屏，显示右侧结果区域
+            val resultContainer = findViewById<FrameLayout>(R.id.result_container)
+            resultContainer.visibility = View.VISIBLE
+
+            supportFragmentManager.beginTransaction()
+                .replace(R.id.result_container, ResultFragment.newInstance(paragraphs))
+                .commitAllowingStateLoss()
+        } else {
+            // 竖屏，正常跳转
+            val intent = Intent(this, ResultActivity::class.java)
+            intent.putExtra("ocr_result", paragraphs)
+            startActivity(intent)
+        }
+    }
+
+    fun hideResultContainer() {
+        // 隐藏右侧结果显示区域
+        findViewById<FrameLayout>(R.id.result_container).visibility = View.GONE
     }
 
     /**
@@ -464,7 +601,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     preview,
                     imageCapture
                 )
+
                 cameraControl = camera.cameraControl
+                cameraInfo = camera.cameraInfo
+                cameraInfo?.zoomState?.observe(this) { zoomState ->
+                    lastZoomRatio = zoomState.zoomRatio
+                }
 
                 // 设置自动对焦
                 val meteringPointFactory = previewView.meteringPointFactory
@@ -483,9 +625,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
      * @param mode 拍照模式
      */
     private fun saveCaptureMode(mode: CaptureMode) {
-        val editor = preferences.edit()
-        editor.putString("capture_mode", mode.name)
-        editor.apply()
+        preferences.edit {
+            putString("capture_mode", mode.name)
+        }
     }
 
     /**
@@ -714,10 +856,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             Toast.makeText(this, "视频流未启动", Toast.LENGTH_SHORT).show()
             return
         }
-
-        // 获取当前视频流的图片
-        val bitmap = streamView.drawable.toBitmap()
-        processImageOffline(bitmap)
+        val bitmap = streamView.drawable?.toBitmap()
+        if (bitmap != null) {
+            processImage(bitmap)
+        } else {
+            Toast.makeText(this, "当前画面无内容", Toast.LENGTH_SHORT).show()
+        }
     }
 
     /**
@@ -968,7 +1112,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
      */
     private fun toggleSpeech() {
         isSpeechEnabled = !isSpeechEnabled
-        speechStatusSharedPreferences.edit().putBoolean("isSpeechEnabled", isSpeechEnabled).apply()
+        speechStatusSharedPreferences.edit { putBoolean("isSpeechEnabled", isSpeechEnabled) }
         updateToggleSpeechButtonIcon()
 
         if (isSpeechEnabled) {
@@ -1007,12 +1151,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     SpeechStatus.SERVICE_EXPIRED -> speakWithCallback("在线服务已到期，已切换至离线模式，请等待开发者更新在线服务") {
                         processSpeechQueue()
                     }
-                    SpeechStatus.STREAM_MODE -> speakWithCallback("已切换至外置摄像头") {
+                    SpeechStatus.STREAM_MODE -> speakWithCallback("已切换至外置摄像头模式") {
                         processSpeechQueue()
                     }
-                    SpeechStatus.CAMERA_MODE -> speakWithCallback("已切换至内置摄像头") {
+                    SpeechStatus.CAMERA_MODE -> speakWithCallback("已切换至内置摄像头模式") {
                         processSpeechQueue()
                     }
+                    SpeechStatus.FALLBACK_TO_CAMERA -> speakWithCallback(
+                        "外置摄像头还没有准备好呢，正在切换到内置摄像头，后台自动连接到外置摄像头中"
+                    ) { processSpeechQueue() }
                 }
             }
         }
@@ -1031,7 +1178,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 callback()
             }
 
-            @Deprecated("Deprecated in Java")
+            @Deprecated("Deprecated in Java", ReplaceWith("callback()"))
             override fun onError(utteranceId: String?) {
                 callback()
             }
@@ -1050,18 +1197,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 if (!hasNavigated) {
                     hasNavigated = true
                     runOnUiThread {
-                        val intent = Intent(this@MainActivity, ResultActivity::class.java).apply {
-                            putExtra("ocr_result", paragraphs.toTypedArray())
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                        }
-                        startActivity(intent)
+                        showResult(paragraphs.toTypedArray())
                     }
                 }
             }
-
             @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String?) {
-            }
+            override fun onError(utteranceId: String?) {}
         })
         tts.speak("正在跳转结果页面", TextToSpeech.QUEUE_ADD, null, utteranceId)
     }
@@ -1073,11 +1214,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         runOnUiThread {
             if (!hasNavigated) {
                 hasNavigated = true
-                val intent = Intent(this@MainActivity, ResultActivity::class.java).apply {
-                    putExtra("ocr_result", paragraphs.toTypedArray())
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                }
-                startActivity(intent)
+                showResult(paragraphs.toTypedArray())
             }
         }
     }
@@ -1165,6 +1302,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private fun updateConnectionState(newState: ConnectionState) {
         if (connectionState == newState) return
+        val oldState = connectionState
         connectionState = newState
 
         runOnUiThread {
@@ -1181,6 +1319,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     statusText.text = "已连接"
                     connectionStartTime = System.currentTimeMillis()
                     startTimer()
+
+                    // 新增：连接成功时，如果当前在摄像头模式，弹窗提示
+                    if (isCameraMode && oldState != ConnectionState.CONNECTED) {
+                        showStreamReadyDialog()
+                    }
                 }
                 ConnectionState.DISCONNECTED -> {
                     (statusIndicator.background as? AnimationDrawable)?.stop()
@@ -1192,6 +1335,30 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
         }
     }
+
+    private fun showStreamReadyDialog() {
+        if (hasStreamReadyDialogShown) return
+        hasStreamReadyDialogShown = true
+        runOnUiThread {
+            AlertDialog.Builder(this)
+                .setTitle("视频流已连接")
+                .setMessage("检测到视频流已经连接，是否立即切换到视频流？")
+                .setPositiveButton("立即切换") { dialog, _ ->
+                    if (isCameraMode) {
+                        switchCameraMode()
+                    }
+                    dialog.dismiss()
+                    hasStreamReadyDialogShown = false
+                }
+                .setNegativeButton("保持当前") { dialog, _ ->
+                    dialog.dismiss()
+                    hasStreamReadyDialogShown = false
+                }
+                .setCancelable(false)
+                .show()
+        }
+    }
+
 
     private fun startTimer() {
         timerJob?.cancel()
@@ -1305,19 +1472,45 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
             val imageData = sectionData.copyOfRange(imageStart, imageEnd)
             if (isValidJpeg(imageData)) {
-                // 显示图像帧
                 displayImage(imageData)
-
-                // 只有在 isCaptureRequested 为 true 时才触发识别逻辑
+                // 自动模式下，自动分析内容
+                if (currentMode == CaptureMode.AUTO && !isProcessing && enoughCooldown()) {
+                    autoProcessStreamFrame(imageData)
+                }
+                // 手动抓拍
                 if (isCaptureRequested) {
-                    processImage(imageData) // 调用图像处理逻辑
-                    isCaptureRequested = false // 重置标志变量
+                    processImage(imageData)
+                    isCaptureRequested = false
                 }
             }
 
             processedIndex = boundaryIndex + imageEnd
         }
         leftoverData = data.copyOfRange(processedIndex, data.size)
+    }
+
+    private fun enoughCooldown(): Boolean {
+        val now = System.currentTimeMillis()
+        return now - lastCaptureTime >= captureCooldown
+    }
+
+    private fun autoProcessStreamFrame(imageData: ByteArray) {
+        isProcessing = true
+        val bitmap = BitmapFactory.decodeByteArray(imageData, 0, imageData.size)
+        // 用MLKit快速检测有无文字内容
+        val image = InputImage.fromBitmap(bitmap, 0)
+        val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
+        recognizer.process(image)
+            .addOnSuccessListener { visionText ->
+                if (visionText.text.isNotEmpty()) {
+                    processImage(bitmap) // 检测到内容，自动识别
+                    lastCaptureTime = System.currentTimeMillis()
+                }
+                isProcessing = false
+            }
+            .addOnFailureListener {
+                isProcessing = false
+            }
     }
 
 
@@ -1388,6 +1581,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             Log.e(TAG, "Image processing error: ${e.message}")
         }
     }
+
+    @Deprecated("This method has been deprecated in favor of using the\n      {@link OnBackPressedDispatcher} via {@link #getOnBackPressedDispatcher()}.\n      The OnBackPressedDispatcher controls how back button events are dispatched\n      to one or more {@link OnBackPressedCallback} objects.")
+    override fun onBackPressed() {
+        if (isFullScreenPreview) {
+            toggleFullScreenPreview()
+        } else {
+            super.onBackPressed()
+        }
+    }
+
     private fun showToast(message: String) {
         handler.post {
             Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()

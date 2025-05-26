@@ -1,0 +1,196 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:orientation="horizontal"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <!-- 主预览区域 -->
+    <!-- 主预览区域 -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_weight="3">
+
+        <!-- 黑色背景遮罩 -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#000000" />
+
+        <!-- PreviewView 全屏且贴底 -->
+        <androidx.camera.view.PreviewView
+            android:id="@+id/preview_view"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            app:scaleType="fitCenter" />
+
+        <!-- 视频流显示视图 -->
+        <ImageView
+            android:id="@+id/stream_view"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:importantForAccessibility="no"
+            android:visibility="gone"
+            android:scaleType="fitCenter"/>
+
+        <!-- 状态栏卡片 -->
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/topStatusCard"
+            android:layout_width="match_parent"
+            android:layout_height="150dp"
+            android:layout_margin="8dp"
+            app:cardBackgroundColor="@android:color/transparent"
+            app:strokeWidth="0dp"
+            app:cardElevation="0dp"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:padding="12dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <!-- 连接状态指示 -->
+                <View
+                    android:id="@+id/statusIndicator"
+                    android:layout_width="12dp"
+                    android:layout_height="12dp"
+                    android:background="@drawable/status_disconnected"
+                    android:layout_marginEnd="8dp"/>
+
+                <!-- 连接状态文本 -->
+                <TextView
+                    android:id="@+id/statusText"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="未连接"
+                    android:textColor="@color/white"
+                    android:textSize="14sp"/>
+
+                <!-- 连接时间显示 -->
+                <TextView
+                    android:id="@+id/timerText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="连接时间:00:00"
+                    android:textColor="@color/teal_200"
+                    android:textSize="14sp"/>
+            </LinearLayout>
+            <!-- 语音播报切换按钮 -->
+            <androidx.cardview.widget.CardView
+                android:id="@+id/toggle_speech_button_card"
+                android:layout_width="72dp"
+                android:layout_height="72dp"
+                android:layout_gravity="top|start"
+                android:layout_marginTop="70dp"
+                android:layout_marginStart="16dp"
+                app:cardCornerRadius="40dp"
+                app:cardElevation="4dp">
+
+                <ImageView
+                    android:id="@+id/toggle_speech_button"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@string/toggle_speech_button"
+                    android:gravity="center"
+                    android:scaleType="center"
+                    android:src="@drawable/ic_volume_off" />
+            </androidx.cardview.widget.CardView>
+
+            <!-- 模式切换按钮 -->
+            <androidx.cardview.widget.CardView
+                android:id="@+id/mode_button_card"
+                android:layout_width="72dp"
+                android:layout_height="72dp"
+                android:layout_gravity="top|center"
+                android:layout_marginTop="70dp"
+                app:cardCornerRadius="40dp"
+                app:cardElevation="4dp">
+
+                <ImageView
+                    android:id="@+id/mode_button"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@string/scan_mode_button"
+                    android:gravity="center"
+                    android:scaleType="center"
+                    android:src="@drawable/ic_mode_manual" />
+            </androidx.cardview.widget.CardView>
+
+            <!-- 闪光灯按钮 -->
+            <androidx.cardview.widget.CardView
+                android:id="@+id/flash_button_card"
+                android:layout_width="72dp"
+                android:layout_height="72dp"
+                android:layout_gravity="top|end"
+                android:layout_marginTop="70dp"
+                android:layout_marginEnd="16dp"
+                app:cardCornerRadius="40dp"
+                app:cardElevation="4dp">
+
+                <ImageView
+                    android:id="@+id/flash_button"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:contentDescription="@string/flash_light_button"
+                    android:gravity="center"
+                    android:scaleType="center"
+                    android:src="@drawable/ic_flash_off" />
+            </androidx.cardview.widget.CardView>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- 拍照按钮 -->
+        <androidx.cardview.widget.CardView
+            android:id="@+id/capture_button_card"
+            android:layout_width="72dp"
+            android:layout_height="72dp"
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="64dp"
+            app:cardCornerRadius="40dp"
+            app:cardElevation="8dp">
+
+            <ImageView
+                android:id="@+id/capture_button"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@string/camera_button"
+                android:gravity="center"
+                android:scaleType="center"
+                android:src="@drawable/ic_camera" />
+        </androidx.cardview.widget.CardView>
+
+        <!-- 切换摄像头按钮 -->
+        <androidx.cardview.widget.CardView
+            android:id="@+id/camera_switch_button_card"
+            android:layout_width="72dp"
+            android:layout_height="72dp"
+            android:layout_gravity="bottom|end"
+            android:layout_marginBottom="64dp"
+            android:layout_marginEnd="16dp"
+            app:cardCornerRadius="40dp"
+            app:cardElevation="4dp">
+
+            <ImageView
+                android:id="@+id/camera_switch_button"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:contentDescription="@string/camera_switch_button"
+                android:gravity="center"
+                android:scaleType="center"
+                android:src="@drawable/ic_camera_switch" />
+        </androidx.cardview.widget.CardView>
+
+    </FrameLayout>
+
+    <!-- 结果区域（右侧） -->
+    <FrameLayout
+        android:id="@+id/result_container"
+        android:layout_width="300dp"
+        android:layout_height="match_parent"
+        android:background="#F5F5F5"
+        android:visibility="gone" />  <!-- 添加这一行 -->
+</LinearLayout>
